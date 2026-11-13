@@ -1,0 +1,16 @@
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #08090b;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Courier New', Consolas, monospace;
+}
+
+canvas {
+    display: block;
+    border: 1px solid #2a2f33;
+    box-shadow: 0 0 30px rgba(80, 255, 170, 0.08);
+}
