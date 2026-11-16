@@ -16,7 +16,7 @@ class Player {
         this.y = y;
         this.w = 42;
         this.h = 42;
-        this.speed = 5;
+        this.speed = 4;
     }
 
     // player movement
