@@ -30,6 +30,8 @@
 | → / D | Move right |
 | SPACE | Start game |
 | R | Restart after game over |
+| P | Pause / resume |
+| Q | Quit to menu (while paused) |
 | ` | Toggle debug overlay |
 
 ## Technologies
