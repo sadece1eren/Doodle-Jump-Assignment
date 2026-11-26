@@ -21,6 +21,9 @@ let highScore = 0;
 let gameState = "start"; // "start" | "playing" | "gameover"
 let debugOn = false;
 let paused = false;
+let jumpCount = 0; // how many times we've bounced this run
+let startTime = 0; // millis() when the run started, used to show survival time
+let finalTime = 0; // survival time, frozen the moment the run ends
 
 // a single dust puff
 class Dust {
@@ -79,6 +82,7 @@ class Player {
     jump() {
         this.vy = this.jumpForce;
         spawnDust(this.x + this.w / 2, this.y + this.h, 8); // dust kicks off the ground
+        jumpCount++;
     }
 
     update() {
@@ -360,6 +364,8 @@ function resetGame() {
     dustParticles = [];
     camY = 0;
     score = 0;
+    jumpCount = 0;
+    startTime = millis();
 
     // ground, full width
     platforms.push(new Platform(0, H - 40, W));
@@ -434,6 +440,13 @@ function drawGameOver() {
     fill(...GREEN);
     textSize(16);
     text("BEST: " + highScore, W / 2, H / 2 + 5);
+
+    fill(...WHITE);
+    textSize(13);
+    text("Jumps: " + jumpCount + "   Time: " + finalTime + "s", W / 2, H / 2 + 35);
+
+    fill(...GREEN);
+    textSize(16);
     text("[ R ] RESTART", W / 2, H / 2 + 65);
 }
 
@@ -518,6 +531,7 @@ function draw() {
 
         if (player.y > camY + H) {
             gameState = "gameover";
+            finalTime = floor((millis() - startTime) / 1000); // freeze it here, not every frame on the game-over screen
         }
     }
 
