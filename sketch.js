@@ -5,12 +5,22 @@
 const W = 400;
 const H = 600;
 
+// colors
+const GREEN = [90, 240, 160];
+const WHITE = [210, 240, 220];
+
 // game variables
 let player;
 let platforms = [];
 let dustParticles = []; // little puffs that appear when the robot jumps/lands
 let camY = 0;
 let maxY;
+
+let score = 0;
+let highScore = 0;
+let gameState = "start"; // "start" | "playing" | "gameover"
+let debugOn = false;
+let paused = false;
 
 // a single dust puff
 class Dust {
@@ -59,30 +69,24 @@ class Player {
         this.vy = 0;
         this.gravity = 0.6;
         this.jumpForce = -13;
-        this.onGround = false;
         this.prevBottom = y + this.h;
 
         this.facingDir = 1;   // -1 left, 1 right — used so the eyes "look" where you're going
         this.squashTimer = 0; // counts down after landing, drives the squash animation
-        this.wasOnGround = false; // lets us detect the exact frame we touch down
+    }
+
+    // player jump (auto-triggered on landing, not a manual key)
+    jump() {
+        this.vy = this.jumpForce;
+        spawnDust(this.x + this.w / 2, this.y + this.h, 8); // dust kicks off the ground
     }
 
     update() {
-        this.wasOnGround = this.onGround; // remember before we reset it below
         this.prevBottom = this.y + this.h;
         this.vy += this.gravity;
         this.y += this.vy;
-        this.onGround = false;
 
         if (this.squashTimer > 0) this.squashTimer--;
-    }
-
-    jump() {
-        if (this.onGround) {
-            this.vy = this.jumpForce;
-            this.onGround = false;
-            spawnDust(this.x + this.w / 2, this.y + this.h, 8); // dust kicks off the ground
-        }
     }
 
     // player movement
@@ -95,10 +99,6 @@ class Player {
         if (keyIsDown(RIGHT_ARROW) || keyIsDown(68)) {
             this.x += this.speed;
             this.facingDir = 1;
-        }
-
-        if (keyIsDown(UP_ARROW) || keyIsDown(87) || keyIsDown(32)) {
-            player.jump();
         }
 
         // go to the other side
@@ -206,82 +206,272 @@ class Player {
     }
 }
 
-class Platforms {
+// normal platform
+class Platform {
     constructor(x, y, w) {
         this.x = x;
         this.y = y;
         this.w = w;
         this.h = 14;
+        this.type = "normal";
+    }
+
+    update() {}
+
+    // breaking platforms override this to stop counting as landable once broken
+    isLandable() {
+        return true;
     }
 
     draw() {
+        noStroke();
         fill(80, 255, 170);
         rect(this.x, this.y, this.w, this.h);
     }
 }
 
-function checkPlatforms() {
-    if (player.vy < 0) return;
+// moving platform — slides left/right, bounces off the screen edges
+class MovingPlatform extends Platform {
+    constructor(x, y, w) {
+        super(x, y, w);
+        this.type = "moving";
+        this.speed = random(1, 2.5) * (random() < 0.5 ? -1 : 1);
+    }
 
-    for (let p of platforms) {
-        let bottom = player.y + player.h;
+    update() {
+        this.x += this.speed;
 
-        let landing = player.prevBottom <= p.y && bottom >= p.y;
-        let overlapX = player.x + player.w > p.x && player.x < p.x + p.w;
+        if (this.x < 0 || this.x + this.w > W) {
+            this.speed *= -1;
+        }
 
-        if (landing && overlapX) {
-            player.y = p.y - player.h;
-            player.vy = 0;
+        this.x = constrain(this.x, 0, W - this.w);
+    }
 
-            if (!player.wasOnGround) {
-                // the exact frame we touch down — trigger squash + a small dust puff
-                player.squashTimer = 8;
-                spawnDust(player.x + player.w / 2, player.y + player.h, 5);
-            }
+    draw() {
+        noStroke();
+        fill(90, 170, 255);
+        rect(this.x, this.y, this.w, this.h);
+    }
+}
 
-            player.onGround = true;
+// breaking platform — crumbles and fades out once you land on it
+class BreakingPlatform extends Platform {
+    constructor(x, y, w) {
+        super(x, y, w);
+        this.type = "breaking";
+        this.broken = false;
+        this.breakTimer = 0;
+    }
+
+    update() {
+        if (this.broken) {
+            this.breakTimer++;
+        }
+    }
+
+    isLandable() {
+        return !this.broken;
+    }
+
+    draw() {
+        noStroke();
+
+        if (!this.broken) {
+            fill(255, 120, 90);
+            rect(this.x, this.y, this.w, this.h);
+
+            stroke(190, 70, 50);
+            strokeWeight(1.5);
+            line(this.x + this.w * 0.3, this.y + 2, this.x + this.w * 0.38, this.y + this.h - 2);
+            line(this.x + this.w * 0.65, this.y + 2, this.x + this.w * 0.57, this.y + this.h - 2);
+            noStroke();
+        } else {
+            fill(255, 120, 90, max(0, 255 - this.breakTimer * 15));
+            rect(this.x, this.y + this.breakTimer * 2, this.w / 2 - 2, this.h);
+            rect(this.x + this.w / 2 + 2, this.y + this.breakTimer * 3, this.w / 2 - 2, this.h);
         }
     }
 }
 
+// choose random platform type
+function randomPlatform(x, y, w) {
+    let r = random();
+
+    if (r < 0.15) return new BreakingPlatform(x, y, w);
+    if (r < 0.40) return new MovingPlatform(x, y, w);
+
+    return new Platform(x, y, w);
+}
+
+// check for a landing and auto-bounce the player
+function checkPlatforms() {
+    if (player.vy < 0) return; // only check while falling
+
+    let bottom = player.y + player.h;
+
+    for (let p of platforms) {
+        if (!p.isLandable()) continue;
+
+        let landing = player.prevBottom <= p.y + 2 && bottom >= p.y;
+        let overlapX = player.x + player.w > p.x + 6 && player.x < p.x + p.w - 6;
+
+        if (landing && overlapX) {
+            player.y = p.y - player.h;
+            player.jump();
+            player.squashTimer = 8;
+
+            if (p instanceof BreakingPlatform) {
+                p.broken = true;
+            }
+
+            break; // only one landing per frame
+        }
+    }
+}
+
+// camera follows the player upwards only
 function updateCam() {
-    //camera follows the player upwards only
     let limit = camY + H * 0.4;
+
     if (player.y < limit) {
         camY = player.y - H * 0.4;
     }
 }
 
+// keep generating platforms above the camera
 function platformGenerator() {
     while (maxY > camY - 100) {
         maxY -= random(70, 110);
         let w = random(70, 110);
-        platforms.push(new Platforms(random(0, W - w), maxY, w));
+        platforms.push(randomPlatform(random(0, W - w), maxY, w));
     }
 }
 
+// remove platforms that are below the screen, or fully faded breaking ones
 function removePlatforms() {
-    //remove platforms that are below the screen
-    platforms = platforms.filter(p => p.y < camY + H + 50);
+    platforms = platforms.filter(p => p.y < camY + H + 50 && !(p.broken && p.breakTimer > 18));
 }
 
+// start or restart game
 function resetGame() {
-    //start or restart game
     player = new Player(W / 2, H - 100);
     platforms = [];
     dustParticles = [];
     camY = 0;
+    score = 0;
 
-    //ground full width
-    platforms.push(new Platforms(0, H - 40, W));
+    // ground, full width
+    platforms.push(new Platform(0, H - 40, W));
     maxY = H - 40;
 
     platformGenerator();
 }
 
-// intialize the game
+function startGame() {
+    resetGame();
+    gameState = "playing";
+}
+
+// draw score
+function drawScore() {
+    textFont("Courier New");
+    fill(...WHITE);
+    textSize(18);
+
+    textAlign(LEFT, TOP);
+    text("SCORE " + score, 12, 12);
+
+    textAlign(RIGHT, TOP);
+    fill(...GREEN);
+    text("BEST " + highScore, W - 12, 12);
+}
+
+// start screen
+function drawStartScreen() {
+    textFont("Courier New");
+
+    fill(...GREEN);
+    textAlign(CENTER, CENTER);
+    textSize(32);
+    text("> DOODLE_JUMP", W / 2, H / 2 - 110);
+
+    fill(...WHITE);
+    textSize(14);
+    text("ARROW KEYS or A / D to move", W / 2, H / 2 - 40);
+    text("Land on platforms. Don't fall!", W / 2, H / 2 - 16);
+
+    noFill();
+    stroke(...GREEN);
+    strokeWeight(2);
+    rect(W / 2 - 80, H / 2 + 20, 160, 44, 3);
+
+    noStroke();
+    fill(...GREEN);
+    textSize(16);
+    text("[ SPACE ] RUN", W / 2, H / 2 + 42);
+
+    if (highScore > 0) {
+        fill(...WHITE);
+        textSize(13);
+        text("BEST: " + highScore, W / 2, H / 2 + 95);
+    }
+}
+
+// game over screen
+function drawGameOver() {
+    textFont("Courier New");
+
+    fill(255, 100, 80);
+    textAlign(CENTER, CENTER);
+    textSize(30);
+    text("> GAME OVER", W / 2, H / 2 - 80);
+
+    fill(...WHITE);
+    textSize(18);
+    text("SCORE: " + score, W / 2, H / 2 - 30);
+
+    fill(...GREEN);
+    textSize(16);
+    text("BEST: " + highScore, W / 2, H / 2 + 5);
+    text("[ R ] RESTART", W / 2, H / 2 + 65);
+}
+
+// paused overlay
+function drawPausedOverlay() {
+    noStroke();
+    fill(8, 9, 11, 180);
+    rect(0, 0, W, H);
+
+    textFont("Courier New");
+    textAlign(CENTER, CENTER);
+    fill(...GREEN);
+    textSize(26);
+    text("PAUSED", W / 2, H / 2 - 10);
+
+    fill(...WHITE);
+    textSize(14);
+    text("[ P ] RESUME", W / 2, H / 2 + 24);
+    text("[ Q ] QUIT TO MENU", W / 2, H / 2 + 48);
+}
+
+// debug overlay
+function drawDebugOverlay() {
+    textFont("Courier New");
+    textAlign(LEFT, TOP);
+    textSize(11);
+    fill(...GREEN);
+
+    text("fps: " + Math.round(frameRate()), 12, H - 70);
+    text("platforms: " + platforms.length, 12, H - 56);
+    text("camY: " + Math.round(camY), 12, H - 42);
+    text("vy: " + player.vy.toFixed(2), 12, H - 28);
+}
+
+// initialize the game
 function setup() {
     createCanvas(W, H);
+    highScore = Number(localStorage.getItem("doodleHighScore")) || 0;
     resetGame();
 }
 
@@ -289,19 +479,49 @@ function setup() {
 function draw() {
     background(10, 12, 14);
 
-    player.move();
-    player.update();
-    checkPlatforms();
-    updateCam();
-    platformGenerator();
-    removePlatforms();
-
-    if (player.y > camY + H) {
-        //player fell below the screen -> restart
-        resetGame();
+    if (gameState === "start") {
+        drawStartScreen();
+        return;
     }
 
-    //everything inside push/pop is drawn relative to the camera
+    if (gameState === "gameover") {
+        drawScore();
+        drawGameOver();
+        return;
+    }
+
+    // gameState === "playing" from here on
+    if (!paused) {
+        player.move();
+        player.update();
+        checkPlatforms();
+        updateCam();
+
+        for (let p of platforms) {
+            p.update();
+        }
+
+        platformGenerator();
+        removePlatforms();
+
+        for (let d of dustParticles) {
+            d.update();
+        }
+        dustParticles = dustParticles.filter(d => !d.isDead());
+
+        score = floor(-camY / 10);
+
+        if (score > highScore) {
+            highScore = score;
+            localStorage.setItem("doodleHighScore", highScore);
+        }
+
+        if (player.y > camY + H) {
+            gameState = "gameover";
+        }
+    }
+
+    // everything inside push/pop is drawn relative to the camera
     push();
     translate(0, -camY);
 
@@ -310,12 +530,45 @@ function draw() {
     }
 
     for (let d of dustParticles) {
-        d.update();
         d.draw();
     }
-    dustParticles = dustParticles.filter(d => !d.isDead());
 
     player.draw();
 
     pop();
+
+    drawScore();
+    if (debugOn) drawDebugOverlay();
+    if (paused) drawPausedOverlay();
+}
+
+// keyboard controls
+function keyPressed() {
+    if (key === "`") {
+        debugOn = !debugOn;
+    }
+
+    if (gameState === "playing" && (key === "p" || key === "P")) {
+        paused = !paused;
+    }
+
+    if (paused && (key === "q" || key === "Q")) {
+        paused = false;
+        gameState = "start";
+    }
+
+    if (gameState === "start" && key === " ") {
+        startGame();
+    }
+
+    else if (gameState === "gameover" && (key === "r" || key === "R")) {
+        startGame();
+    }
+}
+
+// click to start
+function mousePressed() {
+    if (gameState === "start" || gameState === "gameover") {
+        startGame();
+    }
 }
